@@ -1212,12 +1212,13 @@ async function saveRecord() {
   btn.textContent = '저장 중...';
   
   try {
-    const result = await apiPost({ action: 'addRecord', record });
+    const url = `${API_URL}?action=addRecord&record=${encodeURIComponent(JSON.stringify(record))}`;
+    const res = await fetch(url);
+    const result = await res.json();
+    
     if (result.error) throw new Error(result.error);
     
-    // 로컬 state 업데이트
     state.records.unshift(record);
-    
     document.getElementById('record-modal').classList.remove('open');
     showToast('기록 저장 완료!');
     openHistory(currentClass);
@@ -1248,7 +1249,10 @@ async function saveClassNote() {
   const note = document.getElementById('note-input').value.trim();
   
   try {
-    const result = await apiPost({ action: 'updateClassNote', classId: currentClass, note });
+    const url = `${API_URL}?action=updateClassNote&classId=${encodeURIComponent(currentClass)}&note=${encodeURIComponent(note)}`;
+    const res = await fetch(url);
+    const result = await res.json();
+    
     if (result.error) throw new Error(result.error);
     
     state.classNotes[currentClass] = note;
