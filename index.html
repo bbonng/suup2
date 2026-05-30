@@ -731,12 +731,14 @@ setTimeout(async () => {
 
 // ═══════════════════════════════════════════════════════
 // API (GET 방식으로 통일 - CORS 해결)
+// 캐시 우회를 위해 매 요청마다 타임스탬프(_t)를 붙임
 // ═══════════════════════════════════════════════════════
 async function apiGet(action, params = {}) {
   const url = new URL(API_URL);
   url.searchParams.set('action', action);
   Object.keys(params).forEach(k => url.searchParams.set(k, params[k]));
-  const res = await fetch(url);
+  url.searchParams.set('_t', Date.now());  // ← 캐시 방지용 타임스탬프
+  const res = await fetch(url, { cache: 'no-store' });
   return res.json();
 }
 
@@ -1199,14 +1201,15 @@ async function saveRecord() {
   btn.textContent = '저장 중...';
   
   try {
-    // GET 방식으로 전송 (CORS 우회)
-    const url = `${API_URL}?action=addRecord&record=${encodeURIComponent(JSON.stringify(record))}`;
-    const res = await fetch(url);
+    // GET 방식으로 전송 (CORS 우회) + 캐시 방지
+    const url = `${API_URL}?action=addRecord&record=${encodeURIComponent(JSON.stringify(record))}&_t=${Date.now()}`;
+    const res = await fetch(url, { cache: 'no-store' });
     const result = await res.json();
     
     if (result.error) throw new Error(result.error);
     
-    state.records.unshift(record);
+    // 저장 성공 후 서버에서 최신 데이터를 다시 받아와 화면 동기화
+    await loadAllData();
     document.getElementById('record-modal').classList.remove('open');
     showToast('기록 저장 완료!');
     openHistory(currentClass);
@@ -1237,9 +1240,9 @@ async function saveClassNote() {
   const note = document.getElementById('note-input').value.trim();
   
   try {
-    // GET 방식으로 전송 (CORS 우회)
-    const url = `${API_URL}?action=updateClassNote&classId=${encodeURIComponent(currentClass)}&note=${encodeURIComponent(note)}`;
-    const res = await fetch(url);
+    // GET 방식으로 전송 (CORS 우회) + 캐시 방지
+    const url = `${API_URL}?action=updateClassNote&classId=${encodeURIComponent(currentClass)}&note=${encodeURIComponent(note)}&_t=${Date.now()}`;
+    const res = await fetch(url, { cache: 'no-store' });
     const result = await res.json();
     
     if (result.error) throw new Error(result.error);
@@ -1284,15 +1287,41 @@ function showToast(msg, isError) {
 </script>
 
 <script>
-// PWA Service Worker
+// ═══════════════════════════════════════════════════════
+// PWA Service Worker (v3)
+// - 데이터(Apps Script)·외부 API 요청은 절대 캐시하지 않음
+// - 앱 파일은 네트워크 우선, 실패 시에만 캐시 사용
+// - 옛 캐시는 activate 시 전부 삭제
+// ═══════════════════════════════════════════════════════
 if ('serviceWorker' in navigator) {
   const swCode = `
-    const CACHE = 'suup-v2';
+    const CACHE = 'suup-v3';
+
     self.addEventListener('install', e => {
-      e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/'])));
+      self.skipWaiting();
     });
+
+    self.addEventListener('activate', e => {
+      e.waitUntil(
+        caches.keys().then(keys =>
+          Promise.all(keys.map(k => caches.delete(k)))
+        ).then(() => self.clients.claim())
+      );
+    });
+
     self.addEventListener('fetch', e => {
-      e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+      const url = e.request.url;
+      // 데이터/외부 API 요청은 항상 네트워크에서 직접 가져옴 (캐시 금지)
+      if (url.includes('script.google.com') ||
+          url.includes('open-meteo.com') ||
+          url.includes('air-quality-api')) {
+        e.respondWith(fetch(e.request));
+        return;
+      }
+      // 그 외(앱 자체 파일)는 네트워크 우선 → 실패 시 캐시
+      e.respondWith(
+        fetch(e.request).catch(() => caches.match(e.request))
+      );
     });
   `;
   const blob = new Blob([swCode], {type:'application/javascript'});
